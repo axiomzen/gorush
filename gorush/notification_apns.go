@@ -13,28 +13,48 @@ import (
 // InitAPNSClient use for initialize APNs Client.
 func InitAPNSClient() error {
 	if PushConf.Ios.Enabled {
-		var err error
-		ext := filepath.Ext(PushConf.Ios.KeyPath)
-
-		switch ext {
-		case ".p12":
-			CertificatePemIos, err = certificate.FromP12File(PushConf.Ios.KeyPath, PushConf.Ios.Password)
-		case ".pem":
-			CertificatePemIos, err = certificate.FromPemFile(PushConf.Ios.KeyPath, PushConf.Ios.Password)
-		default:
-			err = errors.New("wrong certificate key extension")
+		if !PushConf.Ios.Production && !PushConf.Ios.Development {
+			return errors.New("iOS Push notifications enabled, but neither production nor development servers selected")
 		}
-
-		if err != nil {
-			LogError.Error("Cert Error:", err.Error())
-
-			return err
-		}
-
 		if PushConf.Ios.Production {
+			var err error
+			ext := filepath.Ext(PushConf.Ios.KeyPath)
+
+			switch ext {
+			case ".p12":
+				CertificatePemIos, err = certificate.FromP12File(PushConf.Ios.KeyPath, PushConf.Ios.Password)
+			case ".pem":
+				CertificatePemIos, err = certificate.FromPemFile(PushConf.Ios.KeyPath, PushConf.Ios.Password)
+			default:
+				err = errors.New("wrong certificate key extension")
+			}
+
+			if err != nil {
+				LogError.Error("Cert Error:", err.Error())
+
+				return err
+			}
 			ApnsClient = apns.NewClient(CertificatePemIos).Production()
-		} else {
-			ApnsClient = apns.NewClient(CertificatePemIos).Development()
+		}
+		if PushConf.Ios.Development {
+			var err error
+			ext := filepath.Ext(PushConf.Ios.DevKeyPath)
+
+			switch ext {
+			case ".p12":
+				DevCertificatePemIos, err = certificate.FromP12File(PushConf.Ios.DevKeyPath, PushConf.Ios.Password)
+			case ".pem":
+				DevCertificatePemIos, err = certificate.FromPemFile(PushConf.Ios.DevKeyPath, PushConf.Ios.Password)
+			default:
+				err = errors.New("wrong certificate key extension")
+			}
+
+			if err != nil {
+				LogError.Error("Cert Error:", err.Error())
+
+				return err
+			}
+			DevApnsClient = apns.NewClient(CertificatePemIos).Development()
 		}
 	}
 
@@ -180,9 +200,16 @@ Retry:
 
 	for _, token := range req.Tokens {
 		notification.DeviceToken = token
-
 		// send ios notification
-		res, err := ApnsClient.Push(notification)
+		var err error
+		var res *apns.Response
+		if PushConf.Ios.Development {
+			res, err = DevApnsClient.Push(notification)
+		}
+		if (err != nil || res.StatusCode != 200) && PushConf.Ios.Production {
+			// Try Production second, so that if it errors out, these are the ones shown
+			res, err = ApnsClient.Push(notification)
+		}
 
 		if err != nil {
 			// apns server error
@@ -222,6 +249,5 @@ Retry:
 		req.Tokens = newTokens
 		goto Retry
 	}
-
 	return isError
 }
